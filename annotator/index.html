@@ -58,6 +58,7 @@
   <h1>SPEC ANNOTATOR</h1>
   <button id="btnVideo">Open video…</button>
   <button id="btnLandmarks">Open landmarks.json…</button>
+  <button id="btnSaveLandmarks" disabled>Save landmarks.json</button>
   <button id="btnSpecOpen">Open action_spec.json…</button>
   <button id="btnSpecNew">New spec</button>
   <button id="btnSave" disabled>Save spec</button>
@@ -79,7 +80,42 @@
     </div>
 
     <div class="plot-panel">
-      <h2>numeric signals (drag on the timeline to add a plant window)</h2>
+      <div class="row" style="justify-content: space-between; margin-bottom: 2px;">
+        <h2 style="margin:0;">side view (synthetic — depth ↔ height; not the camera view)</h2>
+      </div>
+      <div class="hint" id="sideHint">Shows the axis a monocular estimator's depth is actually
+        ambiguous on. Pick a side below, then drag the highlighted wrist/elbow dots (depth and
+        height only — lateral position stays the estimator's) to where they really are. For
+        jump/vertical-translation corrections use "Edit pelvis height" in the plot below instead —
+        this view's hip point is pinned at a fixed rest height by construction, so dragging it
+        here wouldn't mean anything.</div>
+      <div class="row">
+        <label>rig hip ht</label><input type="number" id="hipZ" value="0.998" step="0.01" style="width:70px">
+        <span class="hint">meters (Y Bot default — use your rig_profile.json's measured hip height for another rig)</span>
+      </div>
+      <div class="row">
+        <button id="btnCorrectLeft" disabled>Correct left arm here</button>
+        <button id="btnCorrectRight" disabled>Correct right arm here</button>
+        <button id="btnCorrectCancel" disabled>Cancel</button>
+        <label>src</label><input type="number" id="ovSrcStart" style="width:56px">
+        <input type="number" id="ovSrcEnd" style="width:56px">
+        <label>ramp</label><input type="number" id="ovRamp" value="6" style="width:50px">
+        <button id="btnCorrectAdd" disabled>Add override</button>
+      </div>
+      <canvas id="sideCanvas" width="1000" height="240" style="width:100%;height:240px;background:#15171b;border-radius:4px;touch-action:none;"></canvas>
+      <div class="legend">
+        <span><i class="swatch" style="background:#5b9dff"></i> other landmarks</span>
+        <span><i class="swatch" style="background:#ffd166"></i> selected wrist / elbow (drag me)</span>
+        <span><i class="swatch" style="background:#4c4f57"></i> ground</span>
+      </div>
+    </div>
+
+    <div class="plot-panel">
+      <div class="row" style="justify-content: space-between; margin-bottom: 2px;">
+        <h2 style="margin:0;">numeric signals</h2>
+        <button id="btnPhMode" disabled>Edit pelvis height</button>
+      </div>
+      <div class="hint" id="plotHint">drag on the timeline to add a plant window</div>
       <div style="position: relative;">
         <svg id="plot" viewBox="0 0 1000 210" preserveAspectRatio="none"></svg>
         <div class="picker-popup" id="pickerPopup">
@@ -94,6 +130,7 @@
         <span><i class="swatch" style="background:#4c8bf5"></i> pelvis_height</span>
         <span><i class="swatch" style="background:#f5734c"></i> wrist z (L solid / R dashed)</span>
         <span><i class="swatch" style="background:#22c55e"></i> ankle height (L solid / R dashed)</span>
+        <span><i class="swatch" style="background:#facc15"></i> pelvis height override (edit mode)</span>
         <span><i class="swatch" style="background:var(--support-both)"></i> both</span>
         <span><i class="swatch" style="background:var(--support-left)"></i> left</span>
         <span><i class="swatch" style="background:var(--support-right)"></i> right</span>
@@ -126,12 +163,33 @@
       <div class="row"><label>fall</label><input type="number" id="fistFallA" placeholder="from"><input type="number" id="fistFallB" placeholder="to"></div>
     </div>
 
+    <div class="card">
+      <h2>arm overrides</h2>
+      <table id="ovTable"><thead><tr><th>side</th><th>src</th><th>ramp</th><th></th></tr></thead>
+        <tbody id="ovBody"></tbody>
+      </table>
+      <div class="empty" id="ovEmpty">none yet — use the side view above</div>
+    </div>
+
+    <div class="card">
+      <h2>pelvis height keyframes</h2>
+      <table id="phTable"><thead><tr><th>frame</th><th>height (m)</th><th></th></tr></thead>
+        <tbody id="phBody"></tbody>
+      </table>
+      <div class="empty" id="phEmpty">none yet — "Edit pelvis height" above, then drag on the plot</div>
+      <div class="hint">≥2 keyframes needed before anything is overridden; outside the first↔last keyframe the original estimator value passes through unchanged</div>
+    </div>
+
     <div class="card hint">
-      Writes only <code>plant</code>, <code>rest_blend_start/end</code> and
-      <code>fists</code> into the opened spec — every other field
-      (<code>arm_overrides</code>, <code>arm_pose</code>, <code>reach</code>,
-      <code>smooth</code>, duel fields…) is left untouched. See
-      <code>docs/PIPELINE.md</code> for the full schema.
+      <b>Save spec</b> writes only <code>plant</code>, <code>rest_blend_start/end</code>,
+      <code>fists</code> and <code>arm_overrides</code> into the opened
+      action_spec — every other field (<code>arm_pose</code>, <code>reach</code>,
+      <code>smooth</code>, duel fields…) is left untouched.
+      <b>Save landmarks.json</b> writes only corrected <code>pelvis_height</code>
+      values, in the keyframed range, into a copy of the opened landmarks file.
+      No leg equivalent of <code>arm_overrides</code> exists in the schema yet,
+      so kick/knee depth corrections still need a spec-level addition first.
+      See <code>docs/PIPELINE.md</code> and <code>docs/MEDIAPIPE_INVESTIGATION.md</code>.
     </div>
   </aside>
 </main>
@@ -144,13 +202,17 @@
 
 const state = {
   landmarks: null,       // parsed landmarks.json
+  landmarksHandle: null,  // FileSystemFileHandle for landmarks.json, when available
   fps: 30,
   frameCount: 0,
   series: null,           // derived per-frame numeric series
   spec: null,              // parsed (or new) action_spec object
   specHandle: null,        // FileSystemFileHandle, when File System Access API is available
   plant: [],                // [{start, end, support}]
-  drag: null,                // {startFrame} while dragging on the plot
+  armOverrides: [],          // [{side, start, end, ramp, wrist_local, elbow_local}]
+  pelvisKeyframes: [],        // [{frame, height}] — human corrections to pelvis_height
+  correction: null,            // in-progress side-view drag session, see beginCorrection()
+  phEditMode: false,
 };
 
 const CONNECTIONS = [
@@ -171,6 +233,70 @@ const CONNECTIONS = [
 // custom properties inconsistently across engines; the CSS in <style>
 // keeps its own copies of the same values for the HTML legend swatches.
 const SUPPORT_COLOR = { both: "#6b7280", left: "#4c8bf5", right: "#f5734c", none: "#a855f7" };
+
+// ---------------------------------------------------------------------
+// Geometry — ported EXACTLY from pipeline/lift_to_mixamo.py's
+// mp_to_mix() / place_chain() / reconstruct(), because arm_overrides'
+// wrist_local/elbow_local numbers are only meaningful if they're
+// expressed in the SAME hip basis the FK apply will read them in. Do
+// not "simplify" this against the Python without re-checking both.
+
+function vsub(a, b) { return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }; }
+function vadd(a, b) { return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }; }
+function vscale(a, s) { return { x: a.x * s, y: a.y * s, z: a.z * s }; }
+function vdot(a, b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+function vcross(a, b) { return { x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x }; }
+function vlen(a) { return Math.sqrt(vdot(a, a)); }
+function vunit(a) { const n = vlen(a); return n > 1e-8 ? vscale(a, 1 / n) : { x: 0, y: 0, z: 0 }; }
+
+function hipZ() { return Number(document.getElementById("hipZ").value) || 0.998; }
+
+// Estimator world (y down, z away-from-camera, mid-hip centered) ->
+// lift's Mixamo-style frame (z up, absolute height via +hipZ()).
+// Mirrors lift_to_mixamo.py's mp_to_mix() exactly.
+function mpToMix(p) {
+  return { x: p.x, y: p.z, z: -p.y + hipZ() };
+}
+
+function rawWorld(frameIdx, name) {
+  const w = state.landmarks.frames[frameIdx].world[name];
+  return { x: w.x, y: w.y, z: w.z };
+}
+
+// Mirrors lift_to_mixamo.py's place_chain(up, left).
+function placeChain(up, left) {
+  const z = vunit(up);
+  let x = vunit(vsub(left, vscale(z, vdot(left, z))));
+  let y = vunit(vcross(z, x));
+  x = vunit(vcross(y, z));
+  return { x, y, z };
+}
+
+// Per-frame hip basis + origin, mirroring reconstruct()'s
+// up/left/place_chain/hips computation in lift_to_mixamo.py. Needs only
+// the four torso landmarks, all present in landmarks.json — no rig
+// profile beyond the single hipZ() height constant.
+function computeBasis(frameIdx) {
+  const ls = mpToMix(rawWorld(frameIdx, "left_shoulder"));
+  const rs = mpToMix(rawWorld(frameIdx, "right_shoulder"));
+  const lh = mpToMix(rawWorld(frameIdx, "left_hip"));
+  const rh = mpToMix(rawWorld(frameIdx, "right_hip"));
+  const hipMid = vscale(vadd(lh, rh), 0.5);
+  const shMid = vscale(vadd(ls, rs), 0.5);
+  let up = vsub(shMid, hipMid);
+  if (vlen(up) < 0.2) up = { x: 0, y: 0, z: 1 };
+  const left = vadd(vsub(ls, rs), vscale(vsub(lh, rh), 0.35));
+  const basis = placeChain(up, left);
+  const hipsP = { x: hipMid.x, y: hipMid.y, z: hipZ() };
+  return { ...basis, hipsP };
+}
+
+// World-space (mix frame) point -> hip-basis local coords, i.e. the
+// exact inverse of lift_to_mixamo.py's hip_local() closure.
+function toLocal(basis, pointMix) {
+  const d = vsub(pointMix, basis.hipsP);
+  return [vdot(d, basis.x), vdot(d, basis.y), vdot(d, basis.z)];
+}
 
 const video = document.getElementById("video");
 const overlay = document.getElementById("overlay");
@@ -194,12 +320,50 @@ document.getElementById("btnVideo").onclick = async () => {
 };
 
 document.getElementById("btnLandmarks").onclick = async () => {
-  const [file] = await pickFiles("application/json,.json");
-  if (!file) return;
-  const data = JSON.parse(await file.text());
+  let data, name;
+  if (window.showOpenFilePicker) {
+    try {
+      const [handle] = await window.showOpenFilePicker({ types: [{ description: "landmarks JSON", accept: { "application/json": [".json"] } }] });
+      state.landmarksHandle = handle;
+      const file = await handle.getFile();
+      data = JSON.parse(await file.text()); name = file.name;
+    } catch (e) { if (e.name !== "AbortError") console.error(e); return; }
+  } else {
+    const [file] = await pickFiles("application/json,.json");
+    if (!file) return;
+    data = JSON.parse(await file.text()); name = file.name;
+    state.landmarksHandle = null;
+  }
   loadLandmarks(data);
-  setStatus(`landmarks: ${file.name} — ${data.frame_count} frames @ ${data.fps.toFixed(2)} fps`);
+  document.getElementById("btnSaveLandmarks").disabled = false;
+  setStatus(`landmarks: ${name} — ${data.frame_count} frames @ ${data.fps.toFixed(2)} fps`
+    + (state.landmarksHandle ? "" : " (this browser can't write in place — Save downloads a copy)"));
 };
+
+document.getElementById("btnSaveLandmarks").onclick = saveLandmarks;
+
+async function saveLandmarks() {
+  const kfs = state.pelvisKeyframes.slice().sort((a, b) => a.frame - b.frame);
+  if (kfs.length >= 2) {
+    for (let f = kfs[0].frame; f <= kfs[kfs.length - 1].frame; f++) {
+      const v = phOverrideAt(f, kfs);
+      if (v !== null) state.landmarks.frames[f - 1].pelvis_height = round5(v);
+    }
+  }
+  const text = JSON.stringify(state.landmarks);
+  if (state.landmarksHandle) {
+    const w = await state.landmarksHandle.createWritable();
+    await w.write(text); await w.close();
+    setStatus("landmarks saved.");
+  } else {
+    const blob = new Blob([text], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "landmarks.json"; a.click();
+    setStatus("downloaded landmarks.json — this browser can't write files in place");
+  }
+}
+
+function round5(v) { return Math.round(v * 1e5) / 1e5; }
 
 document.getElementById("btnSpecOpen").onclick = async () => {
   if (window.showOpenFilePicker) {
@@ -225,7 +389,9 @@ document.getElementById("btnSpecNew").onclick = () => {
   state.spec = {};
   state.specHandle = null;
   state.plant = [];
+  state.armOverrides = [];
   renderPlantTable();
+  renderOverridesTable();
   redrawPlot();
   setStatus("new spec — Save will prompt for a filename (or download, in browsers without file-write support)");
   document.getElementById("btnSave").disabled = false;
@@ -263,7 +429,11 @@ function loadLandmarks(data) {
     raH[i] = p - f.world.right_ankle.y;
   }
   state.series = { ph, lwZ, rwZ, laH, raH };
+  document.getElementById("btnCorrectLeft").disabled = false;
+  document.getElementById("btnCorrectRight").disabled = false;
+  document.getElementById("btnPhMode").disabled = false;
   redrawPlot();
+  drawSideView();
 }
 
 // ---------------------------------------------------------------------
@@ -278,7 +448,12 @@ function populateFromSpec() {
   const fr = (s.fists || {}).rise_src || [], fa = (s.fists || {}).fall_src || [];
   setVal("fistRiseA", fr[0]); setVal("fistRiseB", fr[1]);
   setVal("fistFallA", fa[0]); setVal("fistFallB", fa[1]);
+  state.armOverrides = (s.arm_overrides || []).map(o => ({
+    side: o.side, start: o.src[0], end: o.src[1], ramp: o.ramp_src ?? 6,
+    wrist_local: o.wrist_local, elbow_local: o.elbow_local,
+  }));
   renderPlantTable();
+  renderOverridesTable();
   redrawPlot();
 }
 
@@ -299,6 +474,13 @@ async function saveSpec() {
   const faA = getNum("fistFallA"), faB = getNum("fistFallB");
   if (frA !== undefined && frB !== undefined && faA !== undefined && faB !== undefined) {
     spec.fists = { rise_src: [frA, frB], fall_src: [faA, faB] };
+  }
+
+  if (state.armOverrides.length) {
+    spec.arm_overrides = state.armOverrides.map(o => ({
+      side: o.side, src: [o.start, o.end], ramp_src: o.ramp,
+      wrist_local: o.wrist_local, elbow_local: o.elbow_local,
+    }));
   }
 
   const text = JSON.stringify(spec, null, 2);
@@ -361,6 +543,7 @@ function onFrameChange() {
   drawSkeleton(f - 1); // 0-based array index
   movePlayhead(f);
   highlightPlantRow(f);
+  drawSideView();
 }
 
 // ---------------------------------------------------------------------
@@ -400,11 +583,37 @@ function drawSkeleton(frameIdx) {
 const PLOT_W = 1000, PLOT_H = 210, PLOT_PAD = 6;
 const svg = document.getElementById("plot");
 
-function normalize(arr) {
+function normalizeWithBounds(arr) {
   let lo = Infinity, hi = -Infinity;
   for (const v of arr) { if (v < lo) lo = v; if (v > hi) hi = v; }
   if (hi - lo < 1e-6) hi = lo + 1;
-  return arr.map(v => 1 - (v - lo) / (hi - lo)); // svg y grows downward
+  return { norm: arr.map(v => 1 - (v - lo) / (hi - lo)), lo, hi }; // svg y grows downward
+}
+function normalize(arr) { return normalizeWithBounds(arr).norm; }
+
+function phMetersToPixelY(v) {
+  const norm = (state.phHi - v) / Math.max(1e-6, state.phHi - state.phLo);
+  return PLOT_PAD + Math.max(0, Math.min(1, norm)) * (PLOT_H - 2 * PLOT_PAD);
+}
+function phPixelToMeters(pixelY) {
+  const norm = Math.max(0, Math.min(1, (pixelY - PLOT_PAD) / (PLOT_H - 2 * PLOT_PAD)));
+  return state.phHi - norm * (state.phHi - state.phLo);
+}
+// Linear interpolation between consecutive pelvis-height keyframes;
+// null (pass through the original estimator value) outside the first↔
+// last keyframe. Deliberately no automatic ramp at the edges — same
+// "human declares the exact window" idiom as arm_overrides/plant.
+function phOverrideAt(frameNum, kfs) {
+  kfs = kfs || state.pelvisKeyframes.slice().sort((a, b) => a.frame - b.frame);
+  if (kfs.length < 2 || frameNum < kfs[0].frame || frameNum > kfs[kfs.length - 1].frame) return null;
+  for (let i = 0; i < kfs.length - 1; i++) {
+    const a = kfs[i], b = kfs[i + 1];
+    if (frameNum >= a.frame && frameNum <= b.frame) {
+      const t = b.frame === a.frame ? 0 : (frameNum - a.frame) / (b.frame - a.frame);
+      return a.height + (b.height - a.height) * t;
+    }
+  }
+  return null;
 }
 
 function pathFor(norm) {
@@ -434,18 +643,34 @@ function redrawPlot() {
     svg.appendChild(rect(x0, 0, Math.max(1, x1 - x0), PLOT_H, SUPPORT_COLOR[w.support], 0.28));
   }
 
+  // pelvis_height gets its own normalize call so the ph-edit pin
+  // dragging can invert a pixel Y back into real meters.
+  const phN = normalizeWithBounds(state.series.ph);
+  state.phLo = phN.lo; state.phHi = phN.hi;
   const traces = [
-    [state.series.ph, "#4c8bf5", "4 0"],
-    [state.series.lwZ, "#f5734c", "4 0"], [state.series.rwZ, "#f5734c", "3 3"],
-    [state.series.laH, "#22c55e", "4 0"], [state.series.raH, "#22c55e", "3 3"],
+    [phN.norm, "#4c8bf5", "4 0"],
+    [normalize(state.series.lwZ), "#f5734c", "4 0"], [normalize(state.series.rwZ), "#f5734c", "3 3"],
+    [normalize(state.series.laH), "#22c55e", "4 0"], [normalize(state.series.raH), "#22c55e", "3 3"],
   ];
-  for (const [arr, color, dash] of traces) {
+  for (const [norm, color, dash] of traces) {
     const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    p.setAttribute("d", pathFor(normalize(arr)));
+    p.setAttribute("d", pathFor(norm));
     p.setAttribute("stroke", color); p.setAttribute("stroke-width", "1.5");
     p.setAttribute("stroke-dasharray", dash); p.setAttribute("fill", "none");
     svg.appendChild(p);
   }
+
+  // pelvis-height override curve + keyframe pins (empty unless the
+  // human has added keyframes); redrawn in place by updatePhOverlay()
+  // during a drag, without tearing down the rest of the SVG.
+  const phCurve = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  phCurve.id = "phOverrideCurve";
+  phCurve.setAttribute("stroke", "#facc15"); phCurve.setAttribute("stroke-width", "2");
+  phCurve.setAttribute("fill", "none");
+  svg.appendChild(phCurve);
+  const phPins = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  phPins.id = "phPins";
+  svg.appendChild(phPins);
 
   // drag-capture layer + playhead, on top
   const capture = rect(0, 0, PLOT_W, PLOT_H, "#000", 0);
@@ -466,7 +691,8 @@ function redrawPlot() {
   svg.appendChild(selRect);
 
   movePlayhead(currentFrame());
-  wireDrag(capture, dx);
+  if (state.phEditMode) wirePhEdit(capture); else wireDrag(capture, dx);
+  updatePhOverlay();
 }
 
 function rect(x, y, w, h, fill, opacity) {
@@ -581,6 +807,279 @@ function highlightPlantRow(frameIdx) {
   for (const tr of document.querySelectorAll("#plantBody tr")) {
     const s = Number(tr.dataset.start), e = Number(tr.dataset.end);
     tr.classList.toggle("hot", frameIdx >= s && frameIdx <= e);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Pelvis-height keyframe editing (in the numeric-signals plot, toggled
+// by "Edit pelvis height"). Unlike plant-window creation this never
+// calls redrawPlot() mid-drag — that would tear down and replace the
+// `capture` element the drag is still receiving events on. Instead it
+// mutates the phOverrideCurve/phPins elements in place, same pattern as
+// movePlayhead().
+
+function updatePhOverlay() {
+  const curve = document.getElementById("phOverrideCurve");
+  const group = document.getElementById("phPins");
+  if (!curve || !group || !state.frameCount) return;
+  const dxpx = (PLOT_W - 2 * PLOT_PAD) / Math.max(1, state.frameCount - 1);
+  const kfs = state.pelvisKeyframes.slice().sort((a, b) => a.frame - b.frame);
+
+  let d = "";
+  if (kfs.length >= 2) {
+    for (let f = kfs[0].frame; f <= kfs[kfs.length - 1].frame; f++) {
+      const v = phOverrideAt(f, kfs);
+      const x = PLOT_PAD + (f - 1) * dxpx, y = phMetersToPixelY(v);
+      d += (f === kfs[0].frame ? "M" : "L") + x.toFixed(1) + "," + y.toFixed(1) + " ";
+    }
+  }
+  curve.setAttribute("d", d);
+
+  group.innerHTML = "";
+  for (const k of state.pelvisKeyframes) {
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", PLOT_PAD + (k.frame - 1) * dxpx);
+    c.setAttribute("cy", phMetersToPixelY(k.height));
+    c.setAttribute("r", 5); c.setAttribute("fill", "#facc15");
+    c.setAttribute("stroke", "#111"); c.setAttribute("stroke-width", 1);
+    group.appendChild(c);
+  }
+}
+
+function plotXYFromClient(clientX, clientY) {
+  const box = svg.getBoundingClientRect();
+  const px = ((clientX - box.left) / box.width) * PLOT_W;
+  const py = ((clientY - box.top) / box.height) * PLOT_H;
+  const dx = (PLOT_W - 2 * PLOT_PAD) / Math.max(1, state.frameCount - 1);
+  const idx = Math.round((px - PLOT_PAD) / dx);
+  return { frame: Math.max(1, Math.min(state.frameCount, idx + 1)), y: py };
+}
+
+function wirePhEdit(capture) {
+  let dragIdx = null;
+  const dxpx = (PLOT_W - 2 * PLOT_PAD) / Math.max(1, state.frameCount - 1);
+  function nearestPin(frame, y) {
+    let best = -1, bestD = 1e9;
+    state.pelvisKeyframes.forEach((k, i) => {
+      const kx = PLOT_PAD + (k.frame - 1) * dxpx, ky = phMetersToPixelY(k.height);
+      const d = Math.hypot(kx - (PLOT_PAD + (frame - 1) * dxpx), ky - y);
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    return bestD < 18 ? best : -1;
+  }
+  capture.addEventListener("pointerdown", (e) => {
+    const { frame, y } = plotXYFromClient(e.clientX, e.clientY);
+    const hit = nearestPin(frame, y);
+    dragIdx = hit >= 0 ? hit : (state.pelvisKeyframes.push({ frame, height: phPixelToMeters(y) }), state.pelvisKeyframes.length - 1);
+    updatePhOverlay();
+  });
+  capture.addEventListener("pointermove", (e) => {
+    if (dragIdx === null) return;
+    const { frame, y } = plotXYFromClient(e.clientX, e.clientY);
+    state.pelvisKeyframes[dragIdx] = { frame, height: phPixelToMeters(y) };
+    updatePhOverlay();
+  });
+  window.addEventListener("pointerup", () => {
+    if (dragIdx === null) return;
+    dragIdx = null;
+    renderPhTable();
+  });
+}
+
+function renderPhTable() {
+  const body = document.getElementById("phBody");
+  body.innerHTML = "";
+  const sorted = state.pelvisKeyframes.slice().sort((a, b) => a.frame - b.frame);
+  document.getElementById("phEmpty").style.display = sorted.length ? "none" : "block";
+  for (const k of sorted) {
+    const tr = document.createElement("tr");
+    const tdF = document.createElement("td"); tdF.textContent = k.frame; tr.appendChild(tdF);
+    const tdH = document.createElement("td"); tdH.textContent = k.height.toFixed(3); tr.appendChild(tdH);
+    const tdDel = document.createElement("td"), del = document.createElement("button");
+    del.textContent = "✕";
+    del.onclick = () => { state.pelvisKeyframes = state.pelvisKeyframes.filter(x => x !== k); renderPhTable(); updatePhOverlay(); };
+    tdDel.appendChild(del); tr.appendChild(tdDel);
+    body.appendChild(tr);
+  }
+}
+
+document.getElementById("btnPhMode").onclick = () => {
+  state.phEditMode = !state.phEditMode;
+  document.getElementById("btnPhMode").textContent = state.phEditMode ? "Done editing pelvis height" : "Edit pelvis height";
+  document.getElementById("plotHint").textContent = state.phEditMode
+    ? "click empty space to drop a keyframe pin, drag an existing pin to move it — need ≥2 pins before anything is overridden"
+    : "drag on the timeline to add a plant window";
+  redrawPlot();
+};
+
+// ---------------------------------------------------------------------
+// Side view — synthetic depth/height projection (see the geometry
+// module near the top of this script for computeBasis/toLocal, ported
+// exactly from lift_to_mixamo.py). Horizontal = depth (mix.y — already
+// hip-relative, since landmarks.json's `world` is itself per-frame
+// hip-centered); vertical = absolute height (mix.z, via mpToMix's
+// +hipZ()). This one view is where the two structural gaps found in
+// docs/MEDIAPIPE_INVESTIGATION.md actually become visible and fixable:
+// monocular depth ambiguity, and (via the pelvis-height editor above)
+// blindness to whole-body vertical translation.
+
+const sideCanvas = document.getElementById("sideCanvas");
+const sctx = sideCanvas.getContext("2d");
+const SIDE_DEPTH_RANGE = [-1.1, 1.1];   // meters, horizontal
+const SIDE_HEIGHT_RANGE = [-0.1, 2.0];  // meters, vertical (0 = ground)
+
+function sideToScreen(depth, height) {
+  const W = sideCanvas.width, H = sideCanvas.height;
+  const x = (depth - SIDE_DEPTH_RANGE[0]) / (SIDE_DEPTH_RANGE[1] - SIDE_DEPTH_RANGE[0]) * W;
+  const y = H - (height - SIDE_HEIGHT_RANGE[0]) / (SIDE_HEIGHT_RANGE[1] - SIDE_HEIGHT_RANGE[0]) * H;
+  return [x, y];
+}
+function screenToSide(x, y) {
+  const W = sideCanvas.width, H = sideCanvas.height;
+  return {
+    depth: SIDE_DEPTH_RANGE[0] + (x / W) * (SIDE_DEPTH_RANGE[1] - SIDE_DEPTH_RANGE[0]),
+    height: SIDE_HEIGHT_RANGE[0] + ((H - y) / H) * (SIDE_HEIGHT_RANGE[1] - SIDE_HEIGHT_RANGE[0]),
+  };
+}
+
+function drawSideView() {
+  const W = sideCanvas.width, H = sideCanvas.height;
+  sctx.clearRect(0, 0, W, H);
+  if (!state.landmarks || !state.frameCount) return;
+  const frameIdx = currentFrame() - 1;
+  if (frameIdx < 0 || frameIdx >= state.landmarks.frames.length) return;
+
+  const [, gy] = sideToScreen(0, 0);
+  sctx.strokeStyle = "#4c4f57"; sctx.lineWidth = 1;
+  sctx.beginPath(); sctx.moveTo(0, gy); sctx.lineTo(W, gy); sctx.stroke();
+
+  const names = Object.keys(state.landmarks.frames[frameIdx].world);
+  const mix = {};
+  for (const n of names) mix[n] = mpToMix(rawWorld(frameIdx, n));
+
+  const c = state.correction;
+  if (c && c.frame === frameIdx + 1) {
+    mix[`${c.side}_wrist`] = c.wristMix;
+    mix[`${c.side}_elbow`] = c.elbowMix;
+  }
+
+  sctx.strokeStyle = "#5b9dff"; sctx.lineWidth = 1.5;
+  for (const [a, b] of CONNECTIONS) {
+    if (!mix[a] || !mix[b]) continue;
+    const [ax, ay] = sideToScreen(mix[a].y, mix[a].z);
+    const [bx, by] = sideToScreen(mix[b].y, mix[b].z);
+    sctx.beginPath(); sctx.moveTo(ax, ay); sctx.lineTo(bx, by); sctx.stroke();
+  }
+  sctx.fillStyle = "#5b9dff";
+  for (const n of names) {
+    const [x, y] = sideToScreen(mix[n].y, mix[n].z);
+    sctx.beginPath(); sctx.arc(x, y, 3, 0, Math.PI * 2); sctx.fill();
+  }
+
+  if (c && c.frame === frameIdx + 1) {
+    sctx.fillStyle = "#ffd166";
+    for (const joint of ["wrist", "elbow"]) {
+      const [x, y] = sideToScreen(mix[`${c.side}_${joint}`].y, mix[`${c.side}_${joint}`].z);
+      sctx.beginPath(); sctx.arc(x, y, 6, 0, Math.PI * 2); sctx.fill();
+    }
+  }
+}
+
+function beginCorrection(side) {
+  if (!state.landmarks) return;
+  const frame = currentFrame();
+  state.correction = {
+    side, frame,
+    wristMix: mpToMix(rawWorld(frame - 1, `${side}_wrist`)),
+    elbowMix: mpToMix(rawWorld(frame - 1, `${side}_elbow`)),
+  };
+  setVal("ovSrcStart", frame); setVal("ovSrcEnd", frame);
+  document.getElementById("btnCorrectCancel").disabled = false;
+  document.getElementById("btnCorrectAdd").disabled = false;
+  // Both — not just this side's — button disables while a correction is
+  // in progress: starting the other side would otherwise silently
+  // discard an unsaved drag with no confirmation.
+  document.getElementById("btnCorrectLeft").disabled = true;
+  document.getElementById("btnCorrectRight").disabled = true;
+  drawSideView();
+}
+
+function cancelCorrection() {
+  state.correction = null;
+  document.getElementById("btnCorrectCancel").disabled = true;
+  document.getElementById("btnCorrectAdd").disabled = true;
+  document.getElementById("btnCorrectLeft").disabled = false;
+  document.getElementById("btnCorrectRight").disabled = false;
+  drawSideView();
+}
+
+function addCorrection() {
+  const c = state.correction;
+  if (!c) return;
+  const basis = computeBasis(c.frame - 1);
+  const wrist_local = toLocal(basis, c.wristMix).map(round5);
+  const elbow_local = toLocal(basis, c.elbowMix).map(round5);
+  const start = getNum("ovSrcStart") ?? c.frame;
+  const end = getNum("ovSrcEnd") ?? c.frame;
+  const ramp = getNum("ovRamp") ?? 6;
+  state.armOverrides.push({ side: c.side, start, end, ramp, wrist_local, elbow_local });
+  renderOverridesTable();
+  cancelCorrection();
+}
+
+document.getElementById("btnCorrectLeft").onclick = () => beginCorrection("left");
+document.getElementById("btnCorrectRight").onclick = () => beginCorrection("right");
+document.getElementById("btnCorrectCancel").onclick = cancelCorrection;
+document.getElementById("btnCorrectAdd").onclick = addCorrection;
+document.getElementById("hipZ").addEventListener("change", () => { drawSideView(); });
+
+(function wireSideDrag() {
+  let dragging = null; // 'wrist' | 'elbow' | null
+  function canvasPos(e) {
+    const box = sideCanvas.getBoundingClientRect();
+    return [(e.clientX - box.left) / box.width * sideCanvas.width,
+            (e.clientY - box.top) / box.height * sideCanvas.height];
+  }
+  function hit(x, y) {
+    const c = state.correction;
+    if (!c || c.frame !== currentFrame()) return null;
+    for (const joint of ["wrist", "elbow"]) {
+      const [sx, sy] = sideToScreen(c[`${joint}Mix`].y, c[`${joint}Mix`].z);
+      if (Math.hypot(sx - x, sy - y) < 12) return joint;
+    }
+    return null;
+  }
+  sideCanvas.addEventListener("pointerdown", (e) => { const [x, y] = canvasPos(e); dragging = hit(x, y); });
+  sideCanvas.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const [x, y] = canvasPos(e);
+    const { depth, height } = screenToSide(x, y);
+    const orig = state.correction[`${dragging}Mix`];
+    // Lateral (x) is left untouched — a 2D drag in this view can only
+    // set depth+height. See docs/MEDIAPIPE_INVESTIGATION.md.
+    state.correction[`${dragging}Mix`] = { x: orig.x, y: depth, z: height };
+    drawSideView();
+  });
+  window.addEventListener("pointerup", () => { dragging = null; });
+})();
+
+// ---------------------------------------------------------------------
+// arm_overrides table
+
+function renderOverridesTable() {
+  const body = document.getElementById("ovBody");
+  body.innerHTML = "";
+  document.getElementById("ovEmpty").style.display = state.armOverrides.length ? "none" : "block";
+  for (const o of state.armOverrides) {
+    const tr = document.createElement("tr");
+    const tdSide = document.createElement("td"); tdSide.textContent = o.side; tr.appendChild(tdSide);
+    const tdSrc = document.createElement("td"); tdSrc.textContent = `${o.start}–${o.end}`; tr.appendChild(tdSrc);
+    const tdRamp = document.createElement("td"); tdRamp.textContent = o.ramp; tr.appendChild(tdRamp);
+    const tdDel = document.createElement("td"), del = document.createElement("button");
+    del.textContent = "✕";
+    del.onclick = () => { state.armOverrides = state.armOverrides.filter(x => x !== o); renderOverridesTable(); };
+    tdDel.appendChild(del); tr.appendChild(tdDel);
+    body.appendChild(tr);
   }
 }
 </script>

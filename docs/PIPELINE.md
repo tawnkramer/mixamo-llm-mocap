@@ -107,13 +107,16 @@ windows, the acting limb, the support foot, and the *numeric evidence*
 }
 ```
 
-`plant`, `rest_blend_start/end` and `fists` can be authored visually
-instead of by hand — open `annotator/index.html` (no build step, no
-server) to scrub the plate video with its landmarks overlaid and the
-numeric signals plotted alongside it, and drag out plant windows
-directly on the timeline. See `annotator/README.md`. Everything else in
-this schema (`arm_overrides`, `arm_pose`, `reach`, `smooth`, the duel
-fields below) still gets hand-edited in the JSON.
+`plant`, `rest_blend_start/end`, `fists` and `arm_overrides` can be
+authored visually instead of by hand — open `annotator/index.html` (no
+build step, no server) to scrub the plate video with its landmarks
+overlaid, drag out plant windows on a synced numeric-signals plot, and
+correct depth/height directly on a synthetic side view (arm_overrides)
+or the plot (a `pelvis_height` keyframe editor, saved back into
+landmarks.json — see `docs/MEDIAPIPE_INVESTIGATION.md` for why depth and
+jump height are the two things worth a visual editor). See
+`annotator/README.md`. `arm_pose`, `reach`, `smooth` and the duel fields
+below still get hand-edited in the JSON.
 
 What each support does in the FK apply:
 - `left`/`right`: hip height searched so that foot lands at 0.105 m;
