@@ -107,6 +107,14 @@ windows, the acting limb, the support foot, and the *numeric evidence*
 }
 ```
 
+`plant`, `rest_blend_start/end` and `fists` can be authored visually
+instead of by hand — open `annotator/index.html` (no build step, no
+server) to scrub the plate video with its landmarks overlaid and the
+numeric signals plotted alongside it, and drag out plant windows
+directly on the timeline. See `annotator/README.md`. Everything else in
+this schema (`arm_overrides`, `arm_pose`, `reach`, `smooth`, the duel
+fields below) still gets hand-edited in the JSON.
+
 What each support does in the FK apply:
 - `left`/`right`: hip height searched so that foot lands at 0.105 m;
   the foot is flattened (Z-only, keeps estimator XZ and its own

@@ -161,6 +161,7 @@ airborne beats), when fists close, where the clip locks back to rest.
 | [docs/RIG.md](docs/RIG.md) | Mixamo rig conventions: spaces, units, the rules that must never break |
 | [docs/PITFALLS.md](docs/PITFALLS.md) | Every mistake this pipeline's development paid for, so you don't pay twice |
 | [docs/PROMPTING.md](docs/PROMPTING.md) | Writing gen-video plate prompts that survive retargeting |
+| [annotator/](annotator/README.md) | A local, no-build web viewer for authoring the `plant`/rest-blend/fists part of a spec visually instead of by hand |
 
 ## License
 
